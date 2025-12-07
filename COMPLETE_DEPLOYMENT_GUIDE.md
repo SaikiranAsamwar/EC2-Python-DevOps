@@ -35,15 +35,17 @@
 22. [Step 17: Create Docker Images](#step-14-create-docker-images)
 23. [Step 18: Setup AWS ECR (Elastic Container Registry)](#step-15-setup-aws-ecr-elastic-container-registry)
 24. [Step 19: Push Docker Images to ECR](#step-16-push-docker-images-to-ecr)
-25. [Step 20: Create AWS EKS Cluster](#step-18-create-aws-eks-cluster)
-26. [Step 21: Deploy Application to EKS](#step-19-deploy-application-to-eks)
-27. [Step 22: Configure Jenkins](#step-21-configure-jenkins)
-28. [Step 23: Create Jenkins Pipeline](#step-22-create-jenkins-pipeline)
+26. [Step 20: Create AWS EKS Cluster](#step-18-create-aws-eks-cluster)
+27. [Step 21: Deploy Application to EKS](#step-19-deploy-application-to-eks)
+28. [Step 21: Configure Jenkins](#step-21-configure-jenkins)
+29. [Step 21A: Jenkins + SonarQube Integration](#step-21a-jenkins--sonarqube-integration-in-pipeline)
+30. [Step 22: Create Jenkins Pipeline](#step-22-create-jenkins-pipeline)
+31. [Step 23: Install Prometheus & Grafana](#step-23-install-prometheus--grafana)
 
 ### Reference & Support
-29. [Troubleshooting Guide](#troubleshooting-guide)
-30. [Security Best Practices](#security-best-practices)
-31. [Useful Commands Reference](#useful-commands-reference)
+32. [Troubleshooting Guide](#troubleshooting-guide)
+33. [Security Best Practices](#security-best-practices)
+34. [Useful Commands Reference](#useful-commands-reference)
 
 ---
 
@@ -1997,6 +1999,258 @@ http://YOUR_EC2_PUBLIC_IP:8080
 2. Find **Docker**
 3. **Docker Host URI**: `unix:///var/run/docker.sock`
 4. Click **Save**
+
+### 21.4 Install SonarQube Scanner Plugin
+
+1. Go to **Manage Jenkins > Plugin Manager**
+2. Click **Available plugins** tab
+3. Search for: `SonarQube Scanner`
+4. Click checkbox next to **SonarQube Scanner**
+5. Click **Install without restart**
+6. Wait for installation to complete
+
+### 21.5 Install SonarQube Server Plugin
+
+1. In the same **Available plugins** tab
+2. Search for: `SonarQube Server`
+3. Click checkbox next to **SonarQube Server**
+4. Click **Install without restart**
+
+### 21.6 Configure SonarQube Server in Jenkins
+
+**⚠️ Important**: Make sure SonarQube is running and accessible before this step!
+
+1. Go to **Manage Jenkins > Configure System**
+2. Scroll down to find **SonarQube servers** section
+3. Click **Add SonarQube**
+4. Fill in the following:
+
+   - **Name**: `SonarQube`
+   - **Server URL**: `http://YOUR_EC2_PUBLIC_IP:9000`
+   
+   Example: `http://52.12.34.56:9000`
+
+5. **Server authentication token**: 
+   - Click **Add > Jenkins**
+   - **Kind**: Secret text
+   - **Secret**: Paste the SonarQube token you generated in Step 11.10
+   - **ID**: `sonarqube-token`
+   - Click **Add**
+
+6. Back in SonarQube servers section, select **sonarqube-token** from the dropdown
+7. Click **Save**
+
+### 21.7 Verify SonarQube Integration
+
+To verify Jenkins can connect to SonarQube:
+
+```bash
+# SSH into EC2 instance
+ssh -i your-key.pem ec2-user@YOUR_EC2_PUBLIC_IP
+
+# Test connection
+curl -u admin:YOUR_SONARQUBE_PASSWORD http://localhost:9000/api/system/status
+
+# Expected output:
+# {"status":"UP"}
+```
+
+In Jenkins:
+1. Go to **Manage Jenkins > Configure System**
+2. Find **SonarQube servers** section
+3. Click **Save** (if connected correctly, no errors should appear)
+
+### 21.8 Configure SonarQube Scanner
+
+1. Go to **Manage Jenkins > Global Tool Configuration**
+2. Scroll to **SonarQube Scanner**
+3. Click **Add SonarQube Scanner**
+4. **Name**: `sonar-scanner`
+5. **Install automatically**: ✓ (checked)
+6. Click **Save**
+
+Jenkins will automatically download and install SonarQube Scanner
+
+### 21.9 Verify SonarQube Scanner Installation
+
+After saving, Jenkins will install SonarQube Scanner automatically. To verify:
+
+```bash
+# SSH into Jenkins container or EC2
+ssh -i your-key.pem ec2-user@YOUR_EC2_PUBLIC_IP
+
+# Check Scanner installation
+ls -la /var/lib/jenkins/tools/hudson.plugins.sonar.SonarRunnerInstaller/
+
+# Or within Jenkins:
+# 1. Create a test pipeline job
+# 2. Add stage: sh 'sonar-scanner --version'
+# 3. Run the job
+# 4. Check console output for version info
+```
+
+---
+
+## Step 21A: Jenkins + SonarQube Integration in Pipeline
+
+### 21A.1 Configure Jenkinsfile with SonarQube
+
+Your Jenkinsfile should include a SonarQube scan stage. Here's an example:
+
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        SONAR_HOST_URL = 'http://YOUR_EC2_IP:9000'
+        SONAR_LOGIN = credentials('sonarqube-token')
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh '''
+                    cd backend
+                    pip install -r requirements.txt
+                '''
+            }
+        }
+        
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('SonarQube') {
+                    sh '''
+                        sonar-scanner \
+                        -Dsonar.projectKey=task-manager \
+                        -Dsonar.projectName='Task Manager' \
+                        -Dsonar.projectVersion=1.0 \
+                        -Dsonar.sources=backend,frontend \
+                        -Dsonar.exclusions=**/*test*,**/migrations/* \
+                        -Dsonar.python.coverage.reportPath=coverage.xml
+                    '''
+                }
+            }
+        }
+        
+        stage('Quality Gate') {
+            steps {
+                waitForQualityGate abortPipeline: true
+            }
+        }
+        
+        stage('Docker Build & Push') {
+            steps {
+                sh 'docker build -t task-manager:latest .'
+            }
+        }
+    }
+}
+```
+
+### 21A.2 Create SonarQube Project
+
+1. Go to SonarQube (http://YOUR_EC2_IP:9000)
+2. Click **Create project** button (top right)
+3. **Display name**: `Task Manager`
+4. **Project key**: `task-manager`
+5. Click **Set Up**
+6. Select **Jenkins** as CI/CD platform
+7. Follow the guided setup
+
+### 21A.3 Generate Project Token (if needed)
+
+1. Go to **Administration > Security > Projects**
+2. Find **Task Manager** project
+3. Click on it
+4. Generate a token for the project
+5. Copy and save it
+
+### 21A.4 Run Jenkins Pipeline with SonarQube
+
+1. Go to Jenkins Dashboard
+2. Click your pipeline job
+3. Click **Build Now**
+4. Wait for the build to complete
+5. Go to SonarQube to see analysis results
+
+### 21A.5 View Results in SonarQube
+
+After pipeline runs:
+
+1. Go to SonarQube (http://YOUR_EC2_IP:9000)
+2. Go to **Projects**
+3. Click **Task Manager** project
+4. See code quality metrics:
+   - **Code Coverage**: How much code is tested
+   - **Bugs**: Reported bugs
+   - **Vulnerabilities**: Security issues
+   - **Code Smells**: Code quality issues
+   - **Duplicated Code**: Code duplication percentage
+
+### 21A.6 Setup Quality Gates
+
+Quality Gates enforce minimum quality standards:
+
+1. Go to SonarQube > **Administration > Quality Gates**
+2. Click **Create** to create a new quality gate
+3. **Name**: `Task Manager Quality Gate`
+4. Add conditions:
+
+| Metric | Operator | Value |
+|--------|----------|-------|
+| Coverage | is less than | 80% |
+| Maintainability | is worse than | A |
+| Security | is worse than | A |
+| Reliability | is worse than | A |
+
+5. Click **Save**
+6. Go back to project settings
+7. Set this quality gate as default
+
+### 21A.7 Troubleshoot Jenkins + SonarQube Issues
+
+**Problem**: "Connection refused" error
+```
+Solution: Make sure SonarQube is running
+sudo systemctl status sonarqube
+sudo systemctl start sonarqube
+```
+
+**Problem**: "Invalid or expired token"
+```
+Solution: Regenerate token in SonarQube
+1. Go to Administration > Security > Users
+2. Click admin user
+3. Click Tokens
+4. Generate new token
+5. Update Jenkins credentials
+```
+
+**Problem**: "SonarQube Scanner not found"
+```
+Solution: Install SonarQube Scanner plugin
+1. Manage Jenkins > Plugin Manager
+2. Search for "SonarQube Scanner"
+3. Install without restart
+4. Go to Global Tool Configuration
+5. Configure SonarQube Scanner with auto-install
+```
+
+**Problem**: Quality gate blocking pipeline
+```
+Solution: If you want to continue despite failing quality gate:
+In Jenkinsfile, change:
+  waitForQualityGate abortPipeline: true
+To:
+  waitForQualityGate abortPipeline: false
+This will generate warning but not fail the pipeline
+```
 
 ---
 
