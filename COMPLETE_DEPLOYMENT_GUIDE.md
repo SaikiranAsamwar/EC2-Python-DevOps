@@ -43,10 +43,13 @@
 31. [Step 22: Create Jenkins Pipeline](#step-22-create-jenkins-pipeline)
 32. [Step 23: Install Prometheus & Grafana](#step-23-install-prometheus--grafana)
 
+### Termination & Cleanup
+32. [Termination Process - Complete Cleanup Guide](#termination-process---complete-cleanup-guide)
+
 ### Reference & Support
-32. [Troubleshooting Guide](#troubleshooting-guide)
-33. [Security Best Practices](#security-best-practices)
-34. [Useful Commands Reference](#useful-commands-reference)
+33. [Troubleshooting Guide](#troubleshooting-guide)
+34. [Security Best Practices](#security-best-practices)
+35. [Useful Commands Reference](#useful-commands-reference)
 
 ---
 
@@ -3536,6 +3539,621 @@ aws eks list-clusters --region us-east-1
 
 # Describe cluster
 aws eks describe-cluster --name task-manager-cluster --region us-east-1
+```
+
+---
+
+## 🛑 Termination Process - Complete Cleanup Guide
+
+### Overview
+
+This section provides a **comprehensive, step-by-step guide** to safely terminate the entire project infrastructure. Follow these steps carefully to ensure all resources are properly deleted and you don't incur unnecessary AWS charges.
+
+> **⚠️ WARNING**: This process will **permanently delete** all infrastructure, data, and configurations. Ensure you have backups of any critical data before proceeding.
+
+---
+
+### Phase 1: Backup Critical Data
+
+Before terminating anything, backup your critical data:
+
+#### 1.1 Backup PostgreSQL Database
+
+```bash
+# Connect to PostgreSQL pod
+kubectl exec -n task-manager postgres-0 -- pg_dump -U taskmanager taskmanager > taskmanager_backup.sql
+
+# Download backup to local machine
+# (If running in EC2, copy to local machine via SCP)
+```
+
+#### 1.2 Backup Application Code & Configurations
+
+```bash
+# Backup Jenkins configurations
+sudo tar -czf jenkins_backup.tar.gz /var/lib/jenkins/
+
+# Backup SonarQube data (if using Docker)
+docker cp sonarqube_data:/opt/sonarqube/data/ ./sonarqube_backup/
+
+# Backup application code
+tar -czf app_backup.tar.gz /path/to/application/
+```
+
+#### 1.3 Export Kubernetes Configurations (Optional)
+
+```bash
+# Export all deployments, services, and configmaps
+kubectl get all -n task-manager -o yaml > k8s_backup.yaml
+
+# Export secrets (if needed)
+kubectl get secrets -n task-manager -o yaml > k8s_secrets.yaml
+```
+
+---
+
+### Phase 2: Delete Kubernetes Resources
+
+#### 2.1 Delete Application Deployments & Services
+
+```bash
+# Delete all resources in the namespace
+kubectl delete all --all -n task-manager
+
+# Verify deletion
+kubectl get all -n task-manager
+```
+
+#### 2.2 Delete Persistent Volumes & Claims
+
+```bash
+# Delete all PVCs
+kubectl delete pvc --all -n task-manager
+
+# Delete all PVs (if not using dynamic provisioning)
+kubectl delete pv --all -n task-manager
+
+# Verify deletion
+kubectl get pvc,pv -n task-manager
+```
+
+#### 2.3 Delete ConfigMaps & Secrets
+
+```bash
+# Delete all ConfigMaps
+kubectl delete configmap --all -n task-manager
+
+# Delete all Secrets
+kubectl delete secret --all -n task-manager
+
+# Verify deletion
+kubectl get configmap,secret -n task-manager
+```
+
+#### 2.4 Delete the Namespace
+
+```bash
+# Delete the entire namespace (this will delete all remaining resources)
+kubectl delete namespace task-manager
+
+# Verify deletion
+kubectl get namespaces | grep task-manager
+```
+
+---
+
+### Phase 3: Delete AWS EKS Cluster
+
+#### 3.1 Delete EKS Cluster
+
+```bash
+# Delete the cluster (this will also delete associated resources)
+eksctl delete cluster --name task-manager-cluster --region us-east-1 --force
+
+# Monitor the deletion process
+aws eks list-clusters --region us-east-1
+```
+
+#### 3.2 Delete Associated AWS Resources
+
+```bash
+# Delete IAM roles associated with EKS
+aws iam list-roles --query "Roles[?contains(RoleName, 'task-manager')]" --region us-east-1
+
+# Delete each role (replace with actual role name)
+aws iam delete-role --role-name task-manager-node-role
+aws iam delete-role --role-name task-manager-cluster-role
+
+# Delete VPC (if created specifically for EKS)
+aws ec2 describe-vpcs --filters "Name=tag:Name,Values=task-manager-vpc" --region us-east-1
+aws ec2 delete-vpc --vpc-id vpc-xxxxx --region us-east-1
+```
+
+---
+
+### Phase 4: Delete AWS ECR Repositories
+
+#### 4.1 Delete ECR Repositories
+
+```bash
+# List all ECR repositories
+aws ecr describe-repositories --region us-east-1
+
+# Delete backend repository
+aws ecr delete-repository \
+  --repository-name task-manager/backend \
+  --force \
+  --region us-east-1
+
+# Delete frontend repository
+aws ecr delete-repository \
+  --repository-name task-manager/frontend \
+  --force \
+  --region us-east-1
+
+# Verify deletion
+aws ecr describe-repositories --region us-east-1
+```
+
+---
+
+### Phase 5: Delete EC2 Instance & Related Resources
+
+#### 5.1 Stop & Terminate EC2 Instance
+
+```bash
+# Get instance ID
+aws ec2 describe-instances \
+  --filters "Name=tag:Name,Values=task-manager-master" \
+  --query "Reservations[0].Instances[0].InstanceId" \
+  --region us-east-1
+
+# Terminate instance
+aws ec2 terminate-instances --instance-ids i-xxxxxxxxx --region us-east-1
+
+# Verify termination
+aws ec2 describe-instances --instance-ids i-xxxxxxxxx --region us-east-1
+```
+
+#### 5.2 Delete Security Groups
+
+```bash
+# List security groups
+aws ec2 describe-security-groups \
+  --filters "Name=group-name,Values=task-manager-*" \
+  --region us-east-1
+
+# Delete security groups (wait 5-10 minutes after instance termination)
+aws ec2 delete-security-group \
+  --group-id sg-xxxxxxxxx \
+  --region us-east-1
+```
+
+#### 5.3 Delete Key Pairs
+
+```bash
+# List key pairs
+aws ec2 describe-key-pairs --region us-east-1
+
+# Delete key pair
+aws ec2 delete-key-pair --key-name task-manager-key --region us-east-1
+
+# Remove local private key
+rm -f ~/.ssh/task-manager-key.pem
+```
+
+#### 5.4 Delete Elastic IPs (if allocated)
+
+```bash
+# List Elastic IPs
+aws ec2 describe-addresses --region us-east-1
+
+# Release Elastic IP
+aws ec2 release-address --allocation-id eipalloc-xxxxxxxxx --region us-east-1
+```
+
+#### 5.5 Delete EBS Volumes
+
+```bash
+# List available volumes
+aws ec2 describe-volumes \
+  --filters "Name=status,Values=available" \
+  --region us-east-1
+
+# Delete volume
+aws ec2 delete-volume --volume-id vol-xxxxxxxxx --region us-east-1
+```
+
+---
+
+### Phase 6: Delete Database Resources
+
+#### 6.1 Delete RDS Instance (if using managed PostgreSQL)
+
+```bash
+# If you used AWS RDS instead of EKS StatefulSet:
+aws rds delete-db-instance \
+  --db-instance-identifier task-manager-postgres \
+  --skip-final-snapshot \
+  --region us-east-1
+
+# Verify deletion
+aws rds describe-db-instances --region us-east-1
+```
+
+#### 6.2 Delete RDS Snapshots
+
+```bash
+# List snapshots
+aws rds describe-db-snapshots --region us-east-1
+
+# Delete snapshot
+aws rds delete-db-snapshot \
+  --db-snapshot-identifier task-manager-snapshot \
+  --region us-east-1
+```
+
+---
+
+### Phase 7: Delete Monitoring & Logging Resources
+
+#### 7.1 Delete CloudWatch Logs
+
+```bash
+# List log groups
+aws logs describe-log-groups --region us-east-1
+
+# Delete log group
+aws logs delete-log-group --log-group-name /aws/eks/task-manager-cluster --region us-east-1
+```
+
+#### 7.2 Delete CloudWatch Alarms
+
+```bash
+# List alarms
+aws cloudwatch describe-alarms --region us-east-1
+
+# Delete alarm
+aws cloudwatch delete-alarms \
+  --alarm-names task-manager-cpu-high task-manager-memory-high \
+  --region us-east-1
+```
+
+#### 7.3 Delete Prometheus & Grafana Data
+
+```bash
+# If running as Docker containers on EC2:
+docker stop prometheus grafana-server
+
+docker rm prometheus grafana-server
+
+# Delete volumes
+docker volume rm prometheus_data grafana_storage
+```
+
+---
+
+### Phase 8: Delete Domain & SSL Certificates
+
+#### 8.1 Delete Route 53 Records (if configured)
+
+```bash
+# List hosted zones
+aws route53 list-hosted-zones
+
+# List records in hosted zone
+aws route53 list-resource-record-sets --hosted-zone-id Z1234567890ABC
+
+# Delete record
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z1234567890ABC \
+  --change-batch file://delete-record.json
+```
+
+**delete-record.json**:
+```json
+{
+  "Changes": [{
+    "Action": "DELETE",
+    "ResourceRecordSet": {
+      "Name": "app.example.com",
+      "Type": "A",
+      "TTL": 300,
+      "ResourceRecords": [{"Value": "1.2.3.4"}]
+    }
+  }]
+}
+```
+
+#### 8.2 Delete SSL Certificates
+
+```bash
+# List certificates
+aws acm list-certificates --region us-east-1
+
+# Delete certificate
+aws acm delete-certificate \
+  --certificate-arn arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012 \
+  --region us-east-1
+```
+
+---
+
+### Phase 9: Delete IAM Users & Roles
+
+#### 9.1 Delete IAM Users
+
+```bash
+# List users
+aws iam list-users
+
+# Delete access keys first
+aws iam delete-access-key --user-name task-manager-user --access-key-id AKIAIOSFODNN7EXAMPLE
+
+# Delete user
+aws iam delete-user --user-name task-manager-user
+```
+
+#### 9.2 Delete IAM Policies
+
+```bash
+# List customer managed policies
+aws iam list-policies --scope Local
+
+# Detach policies from roles/users
+aws iam detach-role-policy \
+  --role-name task-manager-role \
+  --policy-arn arn:aws:iam::123456789012:policy/task-manager-policy
+
+# Delete policy
+aws iam delete-policy \
+  --policy-arn arn:aws:iam::123456789012:policy/task-manager-policy
+```
+
+---
+
+### Phase 10: Delete S3 Buckets (if used)
+
+#### 10.1 Delete S3 Bucket Objects & Bucket
+
+```bash
+# List S3 buckets
+aws s3 ls
+
+# Remove all objects in bucket
+aws s3 rm s3://task-manager-bucket --recursive
+
+# Delete bucket
+aws s3 rb s3://task-manager-bucket --force
+```
+
+---
+
+### Phase 11: Clean Up Local Resources
+
+#### 11.1 Remove Local Files & Configurations
+
+```bash
+# Remove kubeconfig
+rm -f ~/.kube/config
+
+# Remove SSH keys
+rm -f ~/.ssh/task-manager-key.pem
+
+# Remove Docker images (on local machine or EC2)
+docker rmi task-manager/frontend:latest
+docker rmi task-manager/backend:latest
+docker rmi postgres:latest
+
+# Remove Docker networks & volumes
+docker network prune -f
+docker volume prune -f
+```
+
+#### 11.2 Clear Environment Variables
+
+```bash
+# Edit ~/.bashrc or ~/.zshrc and remove:
+# export AWS_REGION=us-east-1
+# export AWS_PROFILE=default
+# export KUBECONFIG=~/.kube/config
+# etc.
+
+source ~/.bashrc  # or source ~/.zshrc
+```
+
+---
+
+### Phase 12: Verify Complete Cleanup
+
+#### 12.1 Check AWS Resources
+
+```bash
+# Verify no EC2 instances running
+aws ec2 describe-instances --query "Reservations[*].Instances[*].{State:State.Name,ID:InstanceId}" --region us-east-1
+
+# Verify no EKS clusters
+aws eks list-clusters --region us-east-1
+
+# Verify no ECR repositories
+aws ecr describe-repositories --region us-east-1
+
+# Verify no RDS instances
+aws rds describe-db-instances --region us-east-1
+
+# Verify no security groups (except default)
+aws ec2 describe-security-groups --region us-east-1
+
+# Verify no Elastic IPs
+aws ec2 describe-addresses --region us-east-1
+
+# Verify no VPCs (except default)
+aws ec2 describe-vpcs --region us-east-1
+
+# Verify no subnets (except default)
+aws ec2 describe-subnets --region us-east-1
+```
+
+#### 12.2 Review AWS Billing
+
+```bash
+# Check for any remaining charges
+# Login to AWS Console -> Billing Dashboard
+# Verify Cost Explorer shows declining costs
+```
+
+---
+
+### Phase 13: Final Cleanup Checklist
+
+- [ ] PostgreSQL database backed up
+- [ ] Jenkins configurations backed up
+- [ ] SonarQube data backed up
+- [ ] Application code backed up
+- [ ] All Kubernetes resources deleted
+- [ ] EKS cluster deleted
+- [ ] ECR repositories deleted
+- [ ] EC2 instances terminated
+- [ ] Security groups deleted
+- [ ] Key pairs deleted
+- [ ] Elastic IPs released
+- [ ] EBS volumes deleted
+- [ ] RDS instances deleted (if applicable)
+- [ ] CloudWatch logs deleted
+- [ ] Route 53 records deleted
+- [ ] SSL certificates deleted
+- [ ] IAM users & roles deleted
+- [ ] S3 buckets deleted (if applicable)
+- [ ] Local files cleaned up
+- [ ] Environment variables removed
+
+---
+
+### Termination Script (Automated - Use with Caution)
+
+Create a file named `terminate-all.sh`:
+
+```bash
+#!/bin/bash
+
+# AUTOMATED TERMINATION SCRIPT - USE WITH CAUTION!
+# This script will DELETE all resources. There is no undo.
+
+set -e
+
+CLUSTER_NAME="task-manager-cluster"
+REGION="us-east-1"
+NAMESPACE="task-manager"
+
+echo "⚠️  WARNING: This will DELETE ALL resources!"
+echo "Press Ctrl+C to cancel, or wait 10 seconds to continue..."
+sleep 10
+
+# Phase 1: Delete Kubernetes Resources
+echo "🔄 Deleting Kubernetes resources..."
+kubectl delete namespace $NAMESPACE --ignore-not-found=true
+sleep 30
+
+# Phase 2: Delete EKS Cluster
+echo "🔄 Deleting EKS cluster..."
+eksctl delete cluster --name $CLUSTER_NAME --region $REGION --force
+
+# Phase 3: Delete ECR Repositories
+echo "🔄 Deleting ECR repositories..."
+aws ecr delete-repository --repository-name task-manager/backend --force --region $REGION || true
+aws ecr delete-repository --repository-name task-manager/frontend --force --region $REGION || true
+
+# Phase 4: Terminate EC2 Instance
+echo "🔄 Terminating EC2 instance..."
+INSTANCE_ID=$(aws ec2 describe-instances \
+  --filters "Name=tag:Name,Values=task-manager-master" \
+  --query "Reservations[0].Instances[0].InstanceId" \
+  --region $REGION \
+  --output text)
+
+if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
+  aws ec2 terminate-instances --instance-ids $INSTANCE_ID --region $REGION
+fi
+
+sleep 120
+
+# Phase 5: Delete Security Groups
+echo "🔄 Deleting security groups..."
+SG_IDS=$(aws ec2 describe-security-groups \
+  --filters "Name=group-name,Values=task-manager-*" \
+  --query "SecurityGroups[*].GroupId" \
+  --region $REGION \
+  --output text)
+
+for SG_ID in $SG_IDS; do
+  aws ec2 delete-security-group --group-id $SG_ID --region $REGION || true
+done
+
+# Phase 6: Release Elastic IPs
+echo "🔄 Releasing Elastic IPs..."
+ALLOC_IDS=$(aws ec2 describe-addresses \
+  --query "Addresses[?AssociationId==null].AllocationId" \
+  --region $REGION \
+  --output text)
+
+for ALLOC_ID in $ALLOC_IDS; do
+  aws ec2 release-address --allocation-id $ALLOC_ID --region $REGION || true
+done
+
+echo "✅ Termination complete!"
+echo "Please verify in AWS Console that all resources are deleted."
+```
+
+**Usage**:
+```bash
+chmod +x terminate-all.sh
+./terminate-all.sh
+```
+
+---
+
+### Troubleshooting Termination Issues
+
+#### Issue: "Cluster has service-linked role"
+
+**Solution**:
+```bash
+aws iam get-role --role-name AWSServiceRoleForEKS
+aws iam delete-service-linked-role --role-name AWSServiceRoleForEKS
+```
+
+#### Issue: "Cannot delete security group - it is in use"
+
+**Solution**:
+```bash
+# Wait a few minutes after instance termination
+# Or manually delete ENIs attached to security group
+aws ec2 describe-network-interfaces \
+  --filters "Name=group-id,Values=sg-xxxxxxxxx" \
+  --query "NetworkInterfaces[*].NetworkInterfaceId"
+
+aws ec2 delete-network-interface --network-interface-id eni-xxxxxxxxx
+```
+
+#### Issue: "Volume is still attached"
+
+**Solution**:
+```bash
+# Detach volume first
+aws ec2 detach-volume --volume-id vol-xxxxxxxxx
+# Wait a few seconds
+aws ec2 delete-volume --volume-id vol-xxxxxxxxx
+```
+
+#### Issue: "Cannot delete bucket - not empty"
+
+**Solution**:
+```bash
+# Delete all versions and objects
+aws s3 rm s3://bucket-name --recursive
+aws s3api list-object-versions --bucket bucket-name | jq -r '.Versions[]|"\(.Key) \(.VersionId)"' | while read key vid; do
+  aws s3api delete-object --bucket bucket-name --key "$key" --version-id "$vid"
+done
 ```
 
 ---
