@@ -17,7 +17,7 @@ This repository demonstrates a **production-ready, Dockerized full-stack applica
 
 | Component | Technology | Version |
 |-----------|-----------|---------|
-| **Frontend** | Node.js `http-server` | 18 |
+| **Frontend** | Nginx (Production-ready) | Alpine |
 | **Backend** | Python Flask | 3.11+ |
 | **Database** | PostgreSQL | 15 |
 | **Containerization** | Docker & Docker Compose | Latest |
@@ -109,8 +109,8 @@ sudo docker-compose up -d --build
 ```
 
 ✅ **Done!** Your application is live at:
-- **Frontend**: http://<YOUR_EC2_IP>:3000
-- **Backend**: http://<YOUR_EC2_IP>:5000
+- **Frontend**: http://<YOUR_EC2_IP> (Nginx)
+- **Backend**: http://<YOUR_EC2_IP>:5000 (Flask API)
 
 ---
 
@@ -181,11 +181,11 @@ sudo docker ps
 
 Once deployed, access your services using your EC2 instance's public IP:
 
-| Service | URL | Purpose |
-|---------|-----|---------|
-| **Frontend** | http://<EC2_PUBLIC_IP>:3000 | Web UI |
-| **Backend** | http://<EC2_PUBLIC_IP>:5000 | REST API |
-| **Database** | <EC2_PRIVATE_IP>:5432 | PostgreSQL (internal only) |
+| Service | URL | Port | Purpose |
+|---------|-----|------|---------|
+| **Frontend** | http://<EC2_PUBLIC_IP> | 80 | Web UI (Nginx) |
+| **Backend** | http://<EC2_PUBLIC_IP>:5000 | 5000 | REST API |
+| **Database** | <EC2_PRIVATE_IP>:5432 | 5432 | PostgreSQL (internal only) |
 
 ### Finding Your EC2 Public IP
 
@@ -197,7 +197,7 @@ curl http://169.254.169.254/latest/meta-data/public-ipv4
 # EC2 → Instances → Select your instance → Copy "Public IPv4 address"
 ```
 
-> ⚠️ **Important**: Ensure your EC2 Security Group allows inbound traffic on **ports 3000, 5000, and 5432**
+> ⚠️ **Important**: Ensure your EC2 Security Group allows inbound traffic on **ports 80, 443, 5000, and 5432**
 
 ---
 
@@ -336,11 +336,25 @@ sudo docker-compose logs db
 
 ### Issue: Frontend shows "Index of /" instead of webpage
 
-**Solution**: The Dockerfile is configured to serve from the `templates/` directory
+**Solution**: The Dockerfile is configured with Nginx and serves from `/usr/share/nginx/html`
 ```bash
 # Rebuild the frontend
 sudo docker-compose build --no-cache frontend
 sudo docker-compose restart frontend
+```
+
+### Issue: "Connection refused" on port 80
+
+**Solution**: Check if Nginx container is running and port is available
+```bash
+# Check container status
+sudo docker-compose ps frontend
+
+# View Nginx logs
+sudo docker-compose logs frontend
+
+# Ensure port 80 is not in use by another service
+sudo lsof -i :80
 ```
 
 ### Issue: Out of disk space
@@ -376,12 +390,13 @@ curl http://localhost:5000
 
 | Aspect | Development | Production |
 |--------|-------------|-----------|
+| Frontend Server | http-server | **Nginx** (current) |
 | Image Tags | `latest` | Specific versions (e.g., `3.11`, `15`) |
 | Logging | Verbose | Configured level |
 | Network | All ports exposed | Only necessary ports |
 | Credentials | Hardcoded (demo) | AWS Secrets Manager |
 | Database | Container volume | RDS or managed service |
-| Frontend | http-server | Nginx with SSL |
+| SSL/HTTPS | Not required | Required with Let's Encrypt |
 | Monitoring | Basic logs | CloudWatch, Prometheus |
 
 ### Security Checklist
@@ -389,13 +404,14 @@ curl http://localhost:5000
 - ✅ Use `.env` files (not in Git) for sensitive data
 - ✅ Always use explicit image versions
 - ✅ Restrict database ports to internal network only
-- ✅ Enable HTTPS with SSL certificates
+- ✅ Nginx reverse proxy with security headers
 - ✅ Use strong passwords (generate with `openssl rand -base64 32`)
 - ✅ Enable Docker Content Trust
 - ✅ Backup database regularly
 - ✅ Monitor container logs and CloudWatch
-- ✅ Update base images regularly
+- ✅ Update base images regularly (Nginx, PostgreSQL)
 - ✅ Use read-only filesystems where possible
+- ✅ Enable CORS headers properly in Nginx
 
 ### For Production Deployment
 

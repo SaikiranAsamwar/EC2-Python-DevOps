@@ -4,7 +4,7 @@ This guide provides step-by-step instructions to deploy the **Dockerized full-st
 
 ## 📌 Tech Stack
 
-- **Frontend**: Static UI served via Node.js `http-server`
+- **Frontend**: Nginx (production-ready reverse proxy)
 - **Backend**: Python (Flask)
 - **Database**: PostgreSQL 15
 - **Containerization**: Docker & Docker Compose
@@ -273,11 +273,11 @@ curl http://localhost:3000
 
 Once deployed, access your application using your EC2 instance's public IP:
 
-| Service | URL |
-|---------|-----|
-| Frontend | http://your-instance-public-ip:3000 |
-| Backend API | http://your-instance-public-ip:5000 |
-| Database | postgresql://your-instance-ip:5432 |
+| Service | URL | Port |
+|---------|-----|------|
+| Frontend | http://your-instance-public-ip | 80 |
+| Backend API | http://your-instance-public-ip:5000 | 5000 |
+| Database | your-instance-ip | 5432 |
 
 To find your public IP:
 ```bash
@@ -320,10 +320,14 @@ docker-compose build --no-cache
 
 The application uses **Docker Compose** to orchestrate **three main containers**:
 
-1. **Frontend Container** (Node.js)
-   - Serves static files via `http-server`
-   - Listens on port 3000
-   - Contains HTML, CSS, and JavaScript assets
+1. **Frontend Container** (Nginx)
+   - Production-grade web server
+   - Listens on port 80 (HTTP) and 443 (HTTPS-ready)
+   - Serves static files with caching headers
+   - Reverse proxy to backend API
+   - Security headers (X-Frame-Options, X-Content-Type-Options, etc.)
+   - GZIP compression enabled
+   - Single-page app fallback (try_files directive)
 
 2. **Backend Container** (Python Flask)
    - RESTful API server
@@ -339,6 +343,7 @@ The application uses **Docker Compose** to orchestrate **three main containers**
 
 - Containers communicate over a **user-defined bridge network** (`devops_network`)
 - Allows inter-container communication using service names (e.g., `backend:5000`)
+- Nginx acts as reverse proxy, forwarding `/api/*` requests to Flask backend
 - Persistent data stored using **Docker volumes** (`db_data`)
 - Environment variables passed through `docker-compose.yml`
 
@@ -525,12 +530,14 @@ docker-compose ps
 
 4. **Enable HTTPS**
    ```bash
-   # Install Nginx reverse proxy with SSL
-   sudo yum install nginx -y
+   # Install Nginx reverse proxy with SSL (already configured)
+   # The frontend Dockerfile uses Nginx Alpine
    
-   # Use Let's Encrypt for free SSL certificates
+   # For SSL certificates with Let's Encrypt:
    sudo yum install certbot python3-certbot-nginx -y
-   certbot certonly --nginx -d your-domain.com
+   certbot certonly --standalone -d yourdomain.com
+   
+   # Then update frontend/default.conf with SSL configuration
    ```
 
 5. **Update Security Group Rules**
@@ -565,21 +572,23 @@ docker-compose ps
    ```
 
 10. **Frontend Server**
-    - Replace Node `http-server` with **Nginx** for production-grade frontend
-    - Nginx provides better performance, caching, and security features
+    - Already using **Nginx** (production-grade)
+    - Includes security headers, caching, and compression
+    - Configurable via `frontend/default.conf`
+    - Reverse proxy for API requests to backend
 
 ---
 
 ## ⚠️ Notes & Best Practices
 
-- Always use **explicit image tags** (avoid `latest`)
+- Always use **explicit image versions** (avoid `latest`)
 - Do not commit `.env` files to GitHub
 - Use **AWS Secrets Manager** for production credentials
-- Replace Node `http-server` with **Nginx** for production-grade frontend
-- Test thoroughly before deploying to production
-- Keep Docker and dependencies up to date
-- Use health checks for monitoring container status
-- Implement proper error handling and logging
+- **Nginx** is now the production-ready frontend server (replaces http-server)
+- Static assets are cached with proper headers (CSS, JS: 30 days, HTML: 24 hours)
+- API requests are proxied securely to backend
+- Security headers included by default
+- GZIP compression enabled for faster delivery
 
 ---
 
