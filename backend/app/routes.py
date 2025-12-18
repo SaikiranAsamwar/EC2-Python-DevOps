@@ -276,9 +276,44 @@ def delete_task(task_id):
 
 
 # API Routes - Authentication
+@api_bp.route('/auth/register', methods=['POST'])
+def register_user():
+    """Register a new user"""
+    data = request.get_json()
+    
+    if not data or not all(k in data for k in ('username', 'email', 'full_name', 'role')):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    # Check if user already exists
+    if User.query.filter_by(username=data['username']).first():
+        return jsonify({'error': 'Username already exists'}), 409
+    
+    if User.query.filter_by(email=data['email']).first():
+        return jsonify({'error': 'Email already exists'}), 409
+    
+    try:
+        user = User(
+            username=data['username'],
+            email=data['email'],
+            full_name=data['full_name'],
+            role=data['role'],
+            password=data.get('password')  # Store password if provided
+        )
+        db.session.add(user)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Registration successful',
+            'user': user.to_dict()
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
 @api_bp.route('/auth/login', methods=['POST'])
 def login_user():
-    """Authenticate user and return user info"""
+    """Authenticate existing user and return user info"""
     data = request.get_json()
     
     if not data or not all(k in data for k in ('username', 'role')):
@@ -288,19 +323,7 @@ def login_user():
     user = User.query.filter_by(username=data['username'], role=data['role']).first()
     
     if not user:
-        # Create new user if doesn't exist
-        try:
-            user = User(
-                username=data['username'],
-                email=data.get('email', f"{data['username']}@example.com"),
-                full_name=data.get('full_name', data['username']),
-                role=data['role']
-            )
-            db.session.add(user)
-            db.session.commit()
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Account not found. Please register first.'}), 404
     
     return jsonify({
         'message': 'Login successful',

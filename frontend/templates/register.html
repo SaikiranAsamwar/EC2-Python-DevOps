@@ -347,8 +347,8 @@
           }
 
           try {
-            // Create user via API
-            const response = await fetch("/api/users", {
+            // Register user via API
+            const response = await fetch("/api/auth/register", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json"
@@ -357,7 +357,8 @@
                 username: username,
                 email: email,
                 full_name: fullName,
-                role: userRole
+                role: userRole,
+                password: password
               })
             });
 
@@ -367,14 +368,16 @@
               throw new Error(data.error || "Registration failed");
             }
 
+            // Get user data from response
+            const user = data.user;
+
             // Store authentication data
             sessionStorage.setItem("isAuthenticated", "true");
-            sessionStorage.setItem("username", data.username);
-            sessionStorage.setItem("userId", data.id);
-            sessionStorage.setItem("userEmail", data.email);
-            sessionStorage.setItem("userRole", data.role);
-            sessionStorage.setItem("fullName", data.full_name);
-            sessionStorage.setItem("password_" + data.id, password); // Store password for this user
+            sessionStorage.setItem("username", user.username);
+            sessionStorage.setItem("userId", user.id);
+            sessionStorage.setItem("userEmail", user.email);
+            sessionStorage.setItem("userRole", user.role);
+            sessionStorage.setItem("fullName", user.full_name);
 
             // Show success message
             successMessage.textContent =
@@ -383,7 +386,7 @@
 
             // Redirect to appropriate dashboard after 1 second
             setTimeout(() => {
-              if (data.role === "lead") {
+              if (user.role === "lead") {
                 window.location.href = "/lead-dashboard";
               } else {
                 window.location.href = "/member-dashboard";
