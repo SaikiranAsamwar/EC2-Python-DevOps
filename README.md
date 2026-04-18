@@ -108,6 +108,7 @@ Jenkinsfile
 - Deploy automatically to EKS  
 
 ### Local Deployment (Docker)
+
 ```bash
 docker compose up -d --build
 ````
